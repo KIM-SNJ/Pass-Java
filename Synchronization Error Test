@@ -1,0 +1,133 @@
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
+
+public class TEST {
+
+    // 1. volatile 테스트용 변수
+    private static volatile int volatileCount = 0;
+
+    // 2. ReentrantLock 테스트용 객체
+    private static final ReentrantLock reentrantLock = new ReentrantLock();
+
+    // 3. Atomic 테스트용 변수 (계좌 이체 예시)
+    private static AtomicInteger accountA = new AtomicInteger(1000);
+    private static AtomicInteger accountB = new AtomicInteger(1000);
+
+    // 4. synchronized 교착 상태(Deadlock) 테스트용 락 객체
+    private static final Object lock1 = new Object();
+    private static final Object lock2 = new Object();
+
+    public static void main(String[] args) throws InterruptedException {
+        System.out.println("=== 1. Volatile의 한계 (원자성 보장 불가) ===");
+        testVolatileLimit();
+
+        System.out.println("\n=== 2. ReentrantLock의 장점 (타임아웃으로 교착상태 회피) ===");
+        testReentrantLockAdvantage();
+
+        System.out.println("\n=== 3. Atomic 변수의 한계 (복수 변수 동기화 불가) ===");
+        testAtomicLimit();
+
+        System.out.println("\n=== 4. synchronized의 단점 (교착 상태 위험) ===");
+        System.out.println("⚠️ 주의: 이 테스트 이후로 프로그램이 영원히 멈춥니다(Deadlock).");
+        testSynchronizedDeadlock();
+    }
+
+    // ---------------------------------------------------------
+    // 1. volatile 한계 테스트
+    // ---------------------------------------------------------
+    private static void testVolatileLimit() throws InterruptedException {
+        Runnable task = () -> {
+            for (int i = 0; i < 10000; i++) {
+                volatileCount++; // 읽기->증가->쓰기 복합 연산
+            }
+        };
+
+        Thread t1 = new Thread(task);
+        Thread t2 = new Thread(task);
+        t1.start(); t2.start();
+        t1.join(); t2.join();
+
+        System.out.println("기대값: 20000");
+        System.out.println("실제값: " + volatileCount + " (원자성이 보장되지 않아 데이터가 유실됨)");
+    }
+
+    // ---------------------------------------------------------
+    // 2. ReentrantLock 장점 테스트
+    // ---------------------------------------------------------
+    private static void testReentrantLockAdvantage() throws InterruptedException {
+        Runnable task = () -> {
+            String threadName = Thread.currentThread().getName();
+            try {
+                // 최대 1초만 락을 기다리고 포기함
+                if (reentrantLock.tryLock(1, TimeUnit.SECONDS)) {
+                    try {
+                        System.out.println(threadName + " 락 획득 성공! (3초간 점유)");
+                        Thread.sleep(3000);
+                    } finally {
+                        reentrantLock.unlock();
+                    }
+                } else {
+                    System.out.println(threadName + " 락 획득 실패. (1초 대기 후 포기하여 무한 대기 회피)");
+                }
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        };
+
+        Thread t1 = new Thread(task, "스레드A");
+        Thread t2 = new Thread(task, "스레드B");
+        t1.start(); t2.start();
+        t1.join(); t2.join();
+    }
+
+    // ---------------------------------------------------------
+    // 3. Atomic 변수 한계 테스트
+    // ---------------------------------------------------------
+    private static void testAtomicLimit() throws InterruptedException {
+        // A계좌에서 500원을 빼서 B계좌로 넣는 스레드
+        Thread transferThread = new Thread(() -> {
+            accountA.addAndGet(-500);
+            try { Thread.sleep(50); } catch (InterruptedException e) {} // 이체 중간에 지연 발생
+            accountB.addAndGet(500);
+        });
+
+        transferThread.start();
+
+        // 이체가 진행되는 중간(20ms 후)에 총 자산을 조회
+        Thread.sleep(20);
+        int totalBalance = accountA.get() + accountB.get();
+        System.out.println("이체 진행 중 총 자산 조회 결과 (기대값: 2000)");
+        System.out.println("실제 조회값: " + totalBalance + " (복수 변수 간의 동기화가 불가능하여 중간 상태가 노출됨)");
+
+        transferThread.join();
+    }
+
+    // ---------------------------------------------------------
+    // 4. synchronized 단점 테스트 (Deadlock)
+    // ---------------------------------------------------------
+    private static void testSynchronizedDeadlock() {
+        Thread t1 = new Thread(() -> {
+            synchronized (lock1) {
+                System.out.println("스레드 1: lock1 획득, lock2 대기 중...");
+                try { Thread.sleep(100); } catch (Exception e) {}
+                synchronized (lock2) {
+                    System.out.println("스레드 1: lock2 획득");
+                }
+            }
+        });
+
+        Thread t2 = new Thread(() -> {
+            synchronized (lock2) {
+                System.out.println("스레드 2: lock2 획득, lock1 대기 중...");
+                try { Thread.sleep(100); } catch (Exception e) {}
+                synchronized (lock1) {
+                    System.out.println("스레드 2: lock1 획득");
+                }
+            }
+        });
+
+        t1.start();
+        t2.start();
+    }
+}
